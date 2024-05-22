@@ -9,6 +9,9 @@
 #include <vector>
 #include <string>
 #include <string_view>
+#include <filesystem>
+#include <iterator>
+#include <numeric>
 #include <dirent.h>
 #include <private/ScopedReaddir.h>
 #include <sys/stat.h>
@@ -17,6 +20,7 @@
 #include "misc.h"
 #include "mountinfo.hpp"
 
+namespace fs = std::filesystem;
 using zygisk::Api;
 using zygisk::AppSpecializeArgs;
 using zygisk::ServerSpecializeArgs;
@@ -133,6 +137,29 @@ private:
                 starts_with((mnt->target).data(), "/product/fonts/") || starts_with((mnt->target).data(), "/vendor/fonts/"))) {
                 LOGI("Found Font file: %s\n", (mnt->target).data());
                 fonts.emplace_back(mnt->target);
+            }
+            if (mnt->target == "/system" && mnt->type == "overlay") {
+                auto fs_option = std::string_view(mnt->fs_option);
+                auto res = fs_option.find("lowerdir=");
+                if (res == std::string::npos) continue;
+                auto lowerdirs_begin = res + 9;
+                auto lowerdirs_end = fs_option.find(',', lowerdirs_begin);
+                if (lowerdirs_end == std::string::npos) lowerdirs_end = fs_option.size();
+                auto lowerdirs = fs_option.substr(lowerdirs_begin, lowerdirs_end);
+                for (auto lowerdir : split(lowerdirs, ":")) {
+                    if (lowerdir == "/system") continue;
+                    std::string font_dir_prefixs[3] = {[0] = "product/fonts/", [1] = "fonts/", [2] = "vendor/fonts"};
+                    for (auto font_dir_prefix : font_dir_prefixs) {
+                        auto font_dir = fs::path(lowerdir) / font_dir_prefix;
+                        if (!fs::exists(font_dir)) continue;
+                        for (auto const& font_file : fs::directory_iterator(font_dir)) {
+                            auto font_path = font_file.path();
+                            auto font_file_trimed = fs::path("/") / std::accumulate(std::next(font_path.begin(), 5), font_path.end(), fs::path{}, std::divides{});
+                            LOGI("Found Font file: %s\n", font_file_trimed.string().data());
+                            fonts.emplace_back(font_file_trimed);
+                        }
+                    }
+                }
             }
         }
         return true;
